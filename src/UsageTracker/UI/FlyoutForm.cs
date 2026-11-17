@@ -339,7 +339,7 @@ internal sealed class FlyoutForm : Form
             y += Text_(g, "No daily budget on weekends", f.Body, t.SubText, x, y, m) + S(8);
         }
 
-        var reset = q.ResetDate is { } rd ? $"resets {rd:MMM d}" : "reset date unknown";
+        var reset = q.ResetDate is { } rd ? $"resets {rd.ToString("M")}" : "reset date unknown";
         var window = view.Usage.Windows.FirstOrDefault();
         var countdown = window?.ResetsAt is { } ra ? $" · in {UsageMath.FormatDuration(ra - now)}" : "";
         y = DrawBar(g, "Month", $"{q.Remaining} / {q.Entitlement} left", 100 - q.PercentRemaining, q.PercentRemaining, null,
