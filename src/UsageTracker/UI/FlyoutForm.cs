@@ -1,16 +1,21 @@
+using System.Diagnostics;
 using System.Drawing.Drawing2D;
 using UsageTracker.Core;
+using UsageTracker.Infrastructure;
 
 namespace UsageTracker.UI;
 
 /// <summary>What the flyout and tooltips show for one provider (or Copilot account).</summary>
-internal sealed record ProviderView(ProviderUsage Usage, CopilotBudgetResult? Budget, string? Account);
+internal sealed record ProviderView(ProviderUsage Usage, CopilotBudgetResult? Budget, string? Account, string? DashboardUrl = null);
 
 /// <summary>Borderless Windows 11–style flyout anchored above the tray. Everything is owner-drawn.</summary>
 internal sealed class FlyoutForm : Form
 {
     private const int LogicalWidth = 360;
     private const int Padding_ = 16;
+
+    private const string LinkPrefix = "link:";
+    private const string LinkLabel = "Open ↗";
 
     private readonly List<(RectangleF Rect, string Id)> _buttons = [];
     private IReadOnlyList<ProviderView> _views = [];
@@ -202,12 +207,26 @@ internal sealed class FlyoutForm : Form
                 case "refresh": RefreshClicked?.Invoke(this, EventArgs.Empty); break;
                 case "settings": SettingsClicked?.Invoke(this, EventArgs.Empty); break;
                 case "quit": QuitClicked?.Invoke(this, EventArgs.Empty); break;
+                case { } id when id.StartsWith(LinkPrefix, StringComparison.Ordinal): OpenUrl(id[LinkPrefix.Length..]); break;
             }
         }
         base.OnMouseUp(e);
     }
 
     private string? HitTest(Point p) => _buttons.FirstOrDefault(b => b.Rect.Contains(p)).Id;
+
+    private void OpenUrl(string url)
+    {
+        HideFlyout();
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true })?.Dispose();
+        }
+        catch (Exception ex) when (ex is System.ComponentModel.Win32Exception or InvalidOperationException)
+        {
+            Log.Write($"could not open {url}: {ex.Message}");
+        }
+    }
 
     // ---- drawing -------------------------------------------------------------------------
 
@@ -226,6 +245,7 @@ internal sealed class FlyoutForm : Form
         g.PixelOffsetMode = PixelOffsetMode.HighQuality;
 
         var y = pad;
+        _buttons.Clear();
 
         // Header
         var titleH = Text_(g, "Usage", f.Title, t.Text, pad, y, measureOnly);
@@ -260,7 +280,6 @@ internal sealed class FlyoutForm : Form
         y += S(12);
         var footerTop = y;
         var footerH = S(56);
-        _buttons.Clear();
         if (!measureOnly)
         {
             using var band = new SolidBrush(t.Dark ? Color.FromArgb(0x20, 0x20, 0x20) : Color.FromArgb(0xEE, 0xEE, 0xEE));
@@ -290,13 +309,30 @@ internal sealed class FlyoutForm : Form
         var t = _theme;
         var u = view.Usage;
 
-        // Name and plan
+        // Name, plan (with owner) and a link to the provider's usage page on the right
         var nameH = Text_(g, u.DisplayName, f.Header, t.Text, x, y, m);
-        var plan = string.Join(" · ", new[] { u.PlanName, view.Account }.Where(s => !string.IsNullOrEmpty(s)));
+        var bodyY = y + (nameH - f.Body.Height) / 2 + S(1);
+        var right = x + width;
+        if (!string.IsNullOrEmpty(view.DashboardUrl))
+        {
+            var id = LinkPrefix + view.DashboardUrl;
+            var size = Measure(g, LinkLabel, f.Body);
+            var rect = new RectangleF(right - size.Width, bodyY, size.Width, size.Height);
+            // Generous hit target; the text itself stays small.
+            _buttons.Add((RectangleF.Inflate(rect, S(6), S(4)), id));
+            if (!m)
+            {
+                using var font = _hover == id ? new Font(f.Body, FontStyle.Underline) : null;
+                Text_(g, LinkLabel, font ?? f.Body, t.Link, rect.X, rect.Y, m);
+            }
+            right = rect.X - S(12);
+        }
+
+        var plan = string.Join(" · ", new[] { u.PlanLabel, view.Account }.Where(s => !string.IsNullOrEmpty(s)));
         if (plan.Length > 0)
         {
-            var nameW = Measure(g, u.DisplayName, f.Header).Width;
-            Text_(g, plan, f.Body, t.SubText, x + nameW + S(8), y + (nameH - f.Body.Height) / 2 + S(1), m);
+            var planX = x + Measure(g, u.DisplayName, f.Header).Width + S(8);
+            TextEllipsis(g, plan, f.Body, t.SubText, planX, bodyY, right - planX, m);
         }
         y += nameH + S(6);
 
@@ -425,6 +461,15 @@ internal sealed class FlyoutForm : Form
             TextRenderer.DrawText(g, text, font, new Point((int)Math.Round(x), (int)Math.Round(y)), color, _theme.Background,
                 TextFormatFlags.NoPadding | TextFormatFlags.SingleLine);
         return Math.Max(size.Height, font.Height);
+    }
+
+    /// <summary>Single line clipped with "…" to fit <paramref name="maxWidth"/>.</summary>
+    private void TextEllipsis(Graphics g, string text, Font font, Color color, float x, float y, float maxWidth, bool measureOnly)
+    {
+        if (measureOnly || maxWidth <= 0) return;
+        var rect = new Rectangle((int)Math.Round(x), (int)Math.Round(y), (int)maxWidth, font.Height + (int)S(2));
+        TextRenderer.DrawText(g, text, font, rect, color, _theme.Background,
+            TextFormatFlags.NoPadding | TextFormatFlags.SingleLine | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPrefix);
     }
 
     private float TextWrapped(Graphics g, string text, Font font, Color color, float x, float y, float width, bool measureOnly)

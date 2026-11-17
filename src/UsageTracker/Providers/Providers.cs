@@ -9,6 +9,10 @@ public interface IUsageProvider
 {
     string Id { get; }
     string DisplayName { get; }
+
+    /// <summary>The provider's own web page that shows this quota.</summary>
+    string DashboardUrl { get; }
+
     Task<ProviderUsage> FetchAsync(CancellationToken ct);
 }
 
@@ -20,7 +24,12 @@ internal abstract class HttpUsageProvider(HttpClient http, TimeProvider clock) :
 {
     public abstract string Id { get; }
     public abstract string DisplayName { get; }
+    public abstract string DashboardUrl { get; }
     protected TimeProvider Clock { get; } = clock;
+
+    private static readonly TimeSpan OwnerCacheTime = TimeSpan.FromHours(6);
+    private string? _owner;
+    private DateTimeOffset _ownerFetchedAt;
 
     protected abstract string ExpiredHint { get; }
 
@@ -55,6 +64,46 @@ internal abstract class HttpUsageProvider(HttpClient http, TimeProvider clock) :
         }
     }
 
+    /// <summary>
+    /// Adds the seat owner to a successful result. The owner rarely changes, so a lookup is
+    /// cached for a few hours; a failed lookup keeps the last known owner and retries next poll.
+    /// </summary>
+    protected async Task<ProviderUsage> WithOwnerAsync(
+        ProviderUsage usage, Func<HttpRequestMessage> request, Func<string, string?> parse, CancellationToken ct)
+    {
+        if (usage.Status != UsageStatus.Ok) return usage;
+        if (_owner is null || Clock.GetUtcNow() - _ownerFetchedAt > OwnerCacheTime)
+        {
+            var body = await TryGetBodyAsync(request(), ct);
+            if (body is not null && parse(body) is { } owner)
+            {
+                _owner = owner;
+                _ownerFetchedAt = Clock.GetUtcNow();
+            }
+        }
+        return _owner is null ? usage : usage with { Owner = _owner };
+    }
+
+    /// <summary>Best-effort GET for optional details: any failure just yields null.</summary>
+    private async Task<string?> TryGetBodyAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        try
+        {
+            using (request)
+            using (var response = await http.SendAsync(request, ct))
+            {
+                if (response.IsSuccessStatusCode) return await response.Content.ReadAsStringAsync(ct);
+                Log.Write($"{Id}: owner lookup HTTP {(int)response.StatusCode}");
+                return null;
+            }
+        }
+        catch (Exception ex) when (ex is HttpRequestException || (ex is OperationCanceledException && !ct.IsCancellationRequested))
+        {
+            Log.Write($"{Id}: owner lookup failed: {ex.GetType().Name}");
+            return null;
+        }
+    }
+
     protected ProviderUsage Fail(string message)
     {
         Log.Write($"{Id}: {message}");
@@ -64,7 +113,7 @@ internal abstract class HttpUsageProvider(HttpClient http, TimeProvider clock) :
     protected ProviderUsage Ok(ParsedUsage parsed) => parsed.Windows.Count == 0
         ? Fail("response contained no usage limits")
         : new(Id, DisplayName, UsageStatus.Ok, parsed.Plan, parsed.Windows,
-            LastUpdated: Clock.GetUtcNow(), Copilot: parsed.Copilot);
+            LastUpdated: Clock.GetUtcNow(), Copilot: parsed.Copilot, Owner: parsed.Owner);
 
     protected static string? TryReadFile(string path)
     {
@@ -83,25 +132,31 @@ internal sealed class ClaudeProvider(HttpClient http, TimeProvider clock) : Http
 {
     public override string Id => "claude";
     public override string DisplayName => "Claude";
+    public override string DashboardUrl => "https://claude.ai/settings/usage";
     protected override string ExpiredHint => "token expired — open Claude Code once to refresh";
 
     private static string CredentialsPath => Path.Combine(AppPaths.Home, ".claude", ".credentials.json");
 
-    public override Task<ProviderUsage> FetchAsync(CancellationToken ct)
+    public override async Task<ProviderUsage> FetchAsync(CancellationToken ct)
     {
         var creds = ClaudeParser.ParseCredentials(TryReadFile(CredentialsPath));
         if (creds is null)
-            return Task.FromResult(ProviderUsage.NotSignedIn(Id, DisplayName, "not signed in — run Claude Code and log in"));
+            return ProviderUsage.NotSignedIn(Id, DisplayName, "not signed in — run Claude Code and log in");
         if (creds.ExpiresAt is { } exp && exp <= Clock.GetUtcNow())
-            return Task.FromResult(ProviderUsage.Expired(Id, DisplayName, ExpiredHint));
+            return ProviderUsage.Expired(Id, DisplayName, ExpiredHint);
 
-        var request = new HttpRequestMessage(HttpMethod.Get, "https://api.anthropic.com/api/oauth/usage");
-        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", creds.AccessToken);
+        var usage = await GetAsync(Request("usage", creds.AccessToken), body =>
+            ClaudeParser.ParseUsage(body, creds.SubscriptionType) is { } p ? Ok(p) : null, ct);
+        return await WithOwnerAsync(usage, () => Request("profile", creds.AccessToken), ClaudeParser.ParseOwner, ct);
+    }
+
+    private static HttpRequestMessage Request(string endpoint, string token)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, $"https://api.anthropic.com/api/oauth/{endpoint}");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
         request.Headers.TryAddWithoutValidation("anthropic-beta", "oauth-2025-04-20");
         request.Headers.TryAddWithoutValidation("User-Agent", "claude-cli/2.0 (external, cli)");
-
-        return GetAsync(request, body =>
-            ClaudeParser.ParseUsage(body, creds.SubscriptionType) is { } p ? Ok(p) : null, ct);
+        return request;
     }
 }
 
@@ -109,24 +164,31 @@ internal sealed class CodexProvider(HttpClient http, TimeProvider clock) : HttpU
 {
     public override string Id => "codex";
     public override string DisplayName => "Codex";
+    public override string DashboardUrl => "https://chatgpt.com/codex/settings/usage";
     protected override string ExpiredHint => "token expired — open Codex once to refresh";
 
     private static string AuthPath => Path.Combine(AppPaths.Home, ".codex", "auth.json");
 
-    public override Task<ProviderUsage> FetchAsync(CancellationToken ct)
+    public override async Task<ProviderUsage> FetchAsync(CancellationToken ct)
     {
         var creds = CodexParser.ParseCredentials(TryReadFile(AuthPath));
         if (creds is null)
-            return Task.FromResult(ProviderUsage.NotSignedIn(Id, DisplayName, "not signed in — run Codex and log in with ChatGPT"));
+            return ProviderUsage.NotSignedIn(Id, DisplayName, "not signed in — run Codex and log in with ChatGPT");
 
-        var request = new HttpRequestMessage(HttpMethod.Get, "https://chatgpt.com/backend-api/wham/usage");
+        var usage = await GetAsync(Request("wham/usage", creds), body =>
+            CodexParser.ParseUsage(body, Clock.GetUtcNow()) is { } p ? Ok(p) : null, ct);
+        return await WithOwnerAsync(usage, () => Request("accounts/check/v4-2023-04-27", creds),
+            body => CodexParser.ParseOwner(body, creds.AccountId), ct);
+    }
+
+    private static HttpRequestMessage Request(string path, CodexCredentials creds)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Get, $"https://chatgpt.com/backend-api/{path}");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", creds.AccessToken);
         if (!string.IsNullOrEmpty(creds.AccountId))
             request.Headers.TryAddWithoutValidation("ChatGPT-Account-Id", creds.AccountId);
         request.Headers.TryAddWithoutValidation("User-Agent", "codex_cli_rs");
-
-        return GetAsync(request, body =>
-            CodexParser.ParseUsage(body, Clock.GetUtcNow()) is { } p ? Ok(p) : null, ct);
+        return request;
     }
 }
 
@@ -138,6 +200,7 @@ internal sealed class CopilotProvider(HttpClient http, TimeProvider clock, Copil
 
     public override string Id => $"copilot:{AccountKey}";
     public override string DisplayName => "Copilot";
+    public override string DashboardUrl => $"https://{Account.Host}/settings/copilot";
     protected override string ExpiredHint => $"token rejected — sign in to {Account.Host} again with Git (Credential Manager)";
 
     public override Task<ProviderUsage> FetchAsync(CancellationToken ct)

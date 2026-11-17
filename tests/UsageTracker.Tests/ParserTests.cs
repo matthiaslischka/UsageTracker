@@ -229,3 +229,41 @@ public class CredentialBlobTests
     public void Decodes_even_length_utf8() =>
         Assert.Equal("gho_abcd", CredentialManager.DecodeBlob(Encoding.UTF8.GetBytes("gho_abcd")));
 }
+
+public class OwnerTests
+{
+    [Theory]
+    [InlineData("""{"organization":{"name":"Acme GmbH","organization_type":"claude_team"}}""", "Acme GmbH")]
+    [InlineData("""{"organization":{"name":"Big Corp","organization_type":"claude_enterprise"}}""", "Big Corp")]
+    [InlineData("""{"organization":{"name":"someone@example.com's Organization","organization_type":"claude_max"}}""", "Personal")]
+    [InlineData("""{"organization":null}""", null)]
+    [InlineData("not json", null)]
+    public void Claude_owner(string json, string? expected) => Assert.Equal(expected, ClaudeParser.ParseOwner(json));
+
+    [Theory]
+    [InlineData("""{"accounts":{"a1":{"account":{"structure":"personal","name":null}}}}""", "a1", "Personal")]
+    [InlineData("""{"accounts":{"a1":{"account":{"structure":"workspace","name":"Acme Team"}}}}""", "a1", "Acme Team")]
+    [InlineData("""{"accounts":{"default":{"account":{"structure":"workspace","name":"Acme Team"}}}}""", null, "Acme Team")]
+    [InlineData("""{"accounts":{}}""", "a1", null)]
+    public void Codex_owner(string json, string? accountId, string? expected) =>
+        Assert.Equal(expected, CodexParser.ParseOwner(json, accountId));
+
+    [Fact]
+    public void Copilot_owner_is_the_granting_organization() =>
+        Assert.Equal("Acme Dev", CopilotParser.ParseUsage(Fixture.Read("copilot_user.json"))!.Owner);
+
+    [Theory]
+    [InlineData("""{"copilot_plan":"business","organization_login_list":["org-a","org-b"]}""", "org-a, org-b")]
+    [InlineData("""{"copilot_plan":"individual_pro"}""", "Personal")]
+    [InlineData("""{"copilot_plan":"business"}""", null)]
+    public void Copilot_owner_fallbacks(string json, string? expected) =>
+        Assert.Equal(expected, CopilotParser.ParseUsage(json)!.Owner);
+
+    [Theory]
+    [InlineData("Team", "Acme GmbH", "Team (Acme GmbH)")]
+    [InlineData("Team", null, "Team")]
+    [InlineData(null, "Acme GmbH", "(Acme GmbH)")]
+    [InlineData(null, null, null)]
+    public void Plan_label_puts_owner_in_brackets(string? plan, string? owner, string? expected) =>
+        Assert.Equal(expected, new ProviderUsage("x", "X", UsageStatus.Ok, plan, Owner: owner).PlanLabel);
+}

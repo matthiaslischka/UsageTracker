@@ -36,8 +36,18 @@ public sealed record ProviderUsage(
     IReadOnlyList<UsageWindow>? Windows = null,
     string? Message = null,
     DateTimeOffset? LastUpdated = null,
-    CopilotQuota? Copilot = null)
+    CopilotQuota? Copilot = null,
+    string? Owner = null)
 {
+    /// <summary>"Team (Evolit GmbH)": the plan with whoever pays for and manages the seat.</summary>
+    public string? PlanLabel => (PlanName, Owner) switch
+    {
+        ({ Length: > 0 } plan, { Length: > 0 } owner) => $"{plan} ({owner})",
+        ({ Length: > 0 } plan, _) => plan,
+        (_, { Length: > 0 } owner) => $"({owner})",
+        _ => null,
+    };
+
     public IReadOnlyList<UsageWindow> Windows { get; init; } = Windows ?? [];
 
     /// <summary>The window with the least remaining, or null when there are none.</summary>

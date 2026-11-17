@@ -23,6 +23,9 @@ internal sealed record Theme(
     public static readonly Color Critical = Color.FromArgb(0xC4, 0x2B, 0x1C);
     public static readonly Color Unknown = Color.FromArgb(0x70, 0x70, 0x70);
 
+    /// <summary>Windows 11 hyperlink colors (accent text, light / dark).</summary>
+    public Color Link => Dark ? Color.FromArgb(0x99, 0xEB, 0xFF) : Color.FromArgb(0x00, 0x5F, 0xB8);
+
     public static Color ForSeverity(Severity s) => s switch
     {
         Severity.Good => Good,

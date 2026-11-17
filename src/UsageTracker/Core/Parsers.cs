@@ -4,7 +4,14 @@ using System.Text.Json.Nodes;
 namespace UsageTracker.Core;
 
 /// <summary>What a provider's usage endpoint told us, before status handling.</summary>
-public sealed record ParsedUsage(string? Plan, IReadOnlyList<UsageWindow> Windows, CopilotQuota? Copilot = null);
+public sealed record ParsedUsage(
+    string? Plan, IReadOnlyList<UsageWindow> Windows, CopilotQuota? Copilot = null, string? Owner = null);
+
+/// <summary>Who pays for and manages a seat, when the account belongs to nobody but the user.</summary>
+internal static class Owners
+{
+    public const string Personal = "Personal";
+}
 
 public sealed record ClaudeCredentials(string AccessToken, DateTimeOffset? ExpiresAt, string? SubscriptionType);
 
@@ -52,6 +59,20 @@ public static class ClaudeParser
             catch (ArgumentOutOfRangeException) { }
         }
         return new ClaudeCredentials(token, expires, oauth.GetString("subscriptionType"));
+    }
+
+    /// <summary>
+    /// Owner from <c>/api/oauth/profile</c>: the organization name for Team/Enterprise seats,
+    /// "Personal" for Pro/Max (whose organization is just named after the user).
+    /// </summary>
+    public static string? ParseOwner(string? json)
+    {
+        var org = Json.TryParse(json).GetObject("organization");
+        if (org is null) return null;
+        var type = org.GetString("organization_type") ?? "";
+        if (type is "claude_team" or "claude_enterprise")
+            return org.GetString("name") is { Length: > 0 } name ? name.Trim() : null;
+        return type.Length > 0 ? Owners.Personal : null;
     }
 
     public static ParsedUsage? ParseUsage(string? json, string? subscriptionType = null)
@@ -115,6 +136,21 @@ public static class CodexParser
         var tokens = Json.TryParse(json).GetObject("tokens");
         var token = tokens.GetString("access_token");
         return string.IsNullOrEmpty(token) ? null : new CodexCredentials(token, tokens.GetString("account_id"));
+    }
+
+    /// <summary>
+    /// Owner from <c>/backend-api/accounts/check</c>: "Personal" for personal accounts,
+    /// otherwise the workspace name.
+    /// </summary>
+    public static string? ParseOwner(string? json, string? accountId)
+    {
+        var accounts = Json.TryParse(json).GetObject("accounts");
+        var entry = (!string.IsNullOrEmpty(accountId) ? accounts.GetObject(accountId) : null)
+            ?? accounts.GetObject("default");
+        var account = entry.GetObject("account");
+        if (account is null) return null;
+        if (account.GetString("structure") == "personal") return Owners.Personal;
+        return account.GetString("name") is { Length: > 0 } name ? name.Trim() : null;
     }
 
     public static ParsedUsage? ParseUsage(string? json, DateTimeOffset now)
@@ -210,6 +246,23 @@ public static class CopilotParser
             }
         }
 
-        return new ParsedUsage(Naming.Title(root.GetString("copilot_plan")), windows, quota);
+        return new ParsedUsage(Naming.Title(root.GetString("copilot_plan")), windows, quota, ParseOwner(root));
+    }
+
+    /// <summary>The organizations granting the seat; "Personal" for individual (Free/Pro) plans.</summary>
+    private static string? ParseOwner(JsonNode root)
+    {
+        var orgs = (root.GetArray("organization_list") ?? [])
+            .Select(o => o.GetString("name") is { Length: > 0 } n ? n : o.GetString("login"))
+            .Where(n => !string.IsNullOrWhiteSpace(n))
+            .Distinct()
+            .ToList();
+        if (orgs.Count == 0)
+            orgs = (root.GetArray("organization_login_list") ?? [])
+                .Select(n => n is JsonValue v && v.TryGetValue<string>(out var str) ? str : null).Where(n => !string.IsNullOrWhiteSpace(n)).ToList();
+        if (orgs.Count > 0) return string.Join(", ", orgs);
+        return root.GetString("copilot_plan")?.StartsWith("individual", StringComparison.Ordinal) == true
+            ? Owners.Personal
+            : null;
     }
 }

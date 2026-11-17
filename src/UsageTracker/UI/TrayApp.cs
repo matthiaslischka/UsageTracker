@@ -338,7 +338,8 @@ internal sealed class TrayApp : ApplicationContext
         var views = _runtimes.Select(rt => new ProviderView(
             rt.Latest ?? new ProviderUsage(rt.Provider.Id, rt.Provider.DisplayName, UsageStatus.Ok, Message: "loading…"),
             rt.Budget,
-            rt.Provider is CopilotProvider c && multiple ? c.Account.Login : null)).ToList();
+            rt.Provider is CopilotProvider c && multiple ? c.Account.Login : null,
+            rt.Provider.DashboardUrl)).ToList();
         _flyout.SetData(views, _runtimes.Any(r => r.InFlight));
     }
 
