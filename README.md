@@ -1,10 +1,32 @@
-<img src="assets/icon.svg" width="64" height="64" alt="">
+<p align="center">
+  <img src="assets/icon.svg" width="72" height="72" alt="">
+</p>
 
-# UsageTracker
+<h1 align="center">UsageTracker</h1>
 
-A small Windows tray app that shows how much of your Claude, Codex and GitHub Copilot subscription allowance is left.
+<p align="center">
+  <b>Your Claude, Codex and GitHub Copilot allowance, always visible in the Windows tray.</b>
+</p>
 
-Each provider gets its own tray icon: a coloured badge with the remaining percentage.
+<p align="center">
+  <img src="assets/demo.gif" width="420" alt="Three UsageTracker badges in the Windows taskbar showing 39, 99 and 100 percent left">
+</p>
+
+You find out you've hit the 5-hour limit when the agent stops mid-task. You find out you've burned through the month's Copilot premium requests on the 18th. UsageTracker puts one small badge per provider next to the clock, showing how much is left right now, so you can see it coming and pace yourself.
+
+- **One glance.** A coloured badge with the remaining percentage, per provider.
+- **Pace, not just totals.** Weekly limits get an "on pace / ahead of pace" marker. Copilot's monthly quota is split into a daily budget over the working days that are left.
+- **Warns you before it hurts.** A Windows notification when a window drops below 20% and again below 5%.
+- **Nothing to set up for Claude and Codex.** It reads the tokens the CLIs already store. It never refreshes, writes or logs them.
+- **Single 50 MB exe.** No installer, no runtime, starts with Windows.
+
+## Quick start
+
+1. Build the exe (see [Build](#build)) and put it anywhere.
+2. Run it. Claude and Codex icons appear if you're signed in to Claude Code / Codex CLI.
+3. For Copilot, right-click an icon → **Settings** and set your login under `copilot.accounts` (see [Settings](#settings)). The token comes from Git Credential Manager, so you need to have pushed to that host with Git once.
+
+## What the badges mean
 
 | Badge | Meaning |
 |---|---|
@@ -17,6 +39,8 @@ Each provider gets its own tray icon: a coloured badge with the remaining percen
 - **Claude** and **Codex** show their tightest window, meaning the one with the least left (the 5-hour session or the weekly limit). The tooltip names that window and says when it resets.
 - **Copilot** shows how much of **today's budget** is left. On a weekend there is no daily budget, so it shows the monthly percentage instead. The tooltip shows today's budget and how many requests are left this month.
 
+## The flyout
+
 Left-click any icon to open the flyout. Opening it also triggers a refresh. Each provider section shows:
 
 - the plan name;
@@ -25,6 +49,8 @@ Left-click any icon to open the flyout. Opening it also triggers a refresh. Each
 - for Copilot, today's used/budget and the month's remaining/entitlement, the reset date, and the overage count when there is one.
 
 The flyout's buttons are Refresh, Settings (opens `settings.json` in your default editor) and Quit. Right-click any icon for Refresh, Start with Windows, Settings and Quit.
+
+## Notifications
 
 Windows notifications fire once per window period:
 
@@ -101,7 +127,7 @@ Settings live in `%APPDATA%\UsageTracker\settings.json`. The file is created wit
 |---|---|---|
 | `pollIntervalMinutes` | `5` | Minutes between polls (1 to 1440). After errors a provider backs off exponentially, up to 30 minutes. |
 | `providers.claude` / `.codex` / `.copilot` | `true` | Turn a provider (and its tray icon) on or off. |
-| `copilot.accounts` | one GHE.com account | `{host, login}` pairs. Each account gets its own icon. Use `github.com` as the host for public GitHub (the API host becomes `api.github.com`). |
+| `copilot.accounts` | `github.com`, empty login | `{host, login}` pairs. Each account gets its own icon; accounts with an empty login are skipped. Use `github.com` for public GitHub (API host `api.github.com`) or your `*.ghe.com` host for GitHub Enterprise Cloud. |
 | `copilot.excludeWeekends` | `true` | Spread the Copilot budget over working days only. On a weekend the icon shows the monthly percentage. |
 | `toasts.enabled` | `true` | Turn all notifications on or off. |
 | `toasts.remainingThresholds` | `[20, 5]` | Notify when a window's remaining % drops below each value. |

@@ -23,7 +23,7 @@ A lightweight Windows system-tray app that polls the remaining subscription allo
 - Sample: `{"plan_type":"plus","rate_limit":{"allowed":true,"limit_reached":false,"primary_window":{"used_percent":6,"limit_window_seconds":18000,"reset_after_seconds":4781,"reset_at":1794916851},"secondary_window":{"used_percent":1,"limit_window_seconds":604800,"reset_after_seconds":475620,"reset_at":1795387689}},"additional_rate_limits":null,"credits":{"has_credits":false,"balance":"0"}}`
 
 **Copilot** (GitHub Enterprise Cloud account)
-- Settings hold a list of accounts `{host, login}`. The default is a single entry `{ "host": "github.com", "login": "your-login" }`.
+- Settings hold a list of accounts `{host, login}`. The default is a single entry `{ "host": "github.com", "login": "" }`; an account with an empty login is skipped until the user fills it in.
 - The token comes from Windows Credential Manager, generic credential target `git:https://{login}@{host}`. It's a non-expiring `gho_` token stored by Git Credential Manager. Read it with `CredRead` P/Invoke. The blob may be UTF-8 or UTF-16, so handle both.
 - `GET https://api.{host}/copilot_internal/user` with headers `Authorization: token <tok>`, `Editor-Version: vscode/1.96.2`, `User-Agent: GitHubCopilotChat/0.26.7`, `X-Github-Api-Version: 2025-04-01`.
 - The main metric is `quota_snapshots.premium_interactions`; skip snapshots where `unlimited` is true.
